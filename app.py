@@ -170,7 +170,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. DATA ENGINE (DEBUG MODE) ---
+# --- 4. DATA ENGINE (FIXED FOR KRAKEN COLUMNS) ---
 
 @st.cache_data(ttl=5) 
 def get_market_data(sym, tf, window, limit=300):
@@ -195,14 +195,17 @@ def get_order_book(sym):
     try:
         exchange = ccxt.kraken({'enableRateLimit': True})
         ob = exchange.fetch_order_book(sym, limit=20)
-        bids = pd.DataFrame(ob['bids'], columns=['price', 'size'])
-        asks = pd.DataFrame(ob['asks'], columns=['price', 'size'])
+        
+        # --- KRAKEN FIX: Accept 3 columns (Price, Size, Timestamp) ---
+        bids = pd.DataFrame(ob['bids'], columns=['price', 'size', 'timestamp'])
+        asks = pd.DataFrame(ob['asks'], columns=['price', 'size', 'timestamp'])
+        # -------------------------------------------------------------
+        
         bid_vol = bids['size'].sum(); ask_vol = asks['size'].sum()
         total = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total if total > 0 else 0
-        return bids, asks, imbalance, bid_vol, ask_vol, None # No error
+        return bids, asks, imbalance, bid_vol, ask_vol, None 
     except Exception as e:
-        # Return error string for debugging
         return pd.DataFrame(), pd.DataFrame(), 0, 0, 0, str(e)
 
 @st.cache_data(ttl=300) 
@@ -308,7 +311,6 @@ with st.sidebar:
     
     # --- 2. INSTITUTIONAL ORDER FLOW MENU ---
     with st.expander("🌊 INSTITUTIONAL FLOW", expanded=False):
-        # NEW: Error catching unpack
         bids, asks, imb, b_vol, a_vol, flow_err = get_order_book(st.session_state.symbol)
         
         if not bids.empty:
@@ -331,9 +333,7 @@ with st.sidebar:
                 st.markdown(f"""<div class="orderflow-row"><span style="color:{b_c}">{b_s:.2f}</span><span style="color:#444">|</span><span style="color:{a_c}">{a_s:.2f}</span></div>""", unsafe_allow_html=True)
         else:
             st.error("OFFLINE")
-            # SHOW ERROR MESSAGE IF OFFLINE
-            if flow_err:
-                st.caption(f"Debug: {flow_err}")
+            if flow_err: st.caption(f"Debug: {flow_err}")
             
     # --- 3. ASSET SELECTION MENU ---
     with st.expander("🪙 ASSET SELECTION", expanded=False):
@@ -458,7 +458,6 @@ if menu == "LIVE FEED":
                 st.markdown(f"""<div style="background:rgba(255,255,255,0.05); padding:10px; border:1px solid #333; display:flex; justify-content:space-between; align-items:center;"><span style="font-size:12px; color:#888;">ACTIVE PNL</span><span style="font-size:20px; font-weight:bold; font-family:'Rajdhani'; color:{pnl_col}">{pnl:+.2f}%</span></div>""", unsafe_allow_html=True)
                 if st.button("CLOSE POSITION"): st.session_state.active_trade = None; st.rerun()
     else:
-        # Fallback if initial fetch fails
         st.error(f"DATA FEED DISCONNECTED. ERROR: {err}")
         st.info("Try refreshing the page or checking your internet connection.")
 
