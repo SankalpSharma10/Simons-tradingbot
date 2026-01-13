@@ -16,13 +16,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. STATE MANAGEMENT ---
+# --- 2. STATE MANAGEMENT & AUTO-FIX ---
 if 'active_trade' not in st.session_state: st.session_state.active_trade = None 
-if 'symbol' not in st.session_state: st.session_state.symbol = 'BTC/USD' # Changed default to USD for Kraken
 if 'news_cache' not in st.session_state: st.session_state.news_cache = []
 if 'last_news_fetch' not in st.session_state: st.session_state.last_news_fetch = datetime.min
 if 'show_calc' not in st.session_state: st.session_state.show_calc = False
 if 'last_alert_signal' not in st.session_state: st.session_state.last_alert_signal = "MONITORING" 
+
+# [AUTO-FIX] Force symbol reset if stuck on old Binance format
+if 'symbol' not in st.session_state or 'USDT' in st.session_state.symbol:
+    st.session_state.symbol = 'BTC/USD'
 
 # --- 3. VISUAL ENGINE ---
 st.markdown("""
@@ -167,12 +170,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. DATA ENGINE (UPDATED TO KRAKEN) ---
+# --- 4. DATA ENGINE (DEBUG MODE) ---
 
 @st.cache_data(ttl=5) 
 def get_market_data(sym, tf, window, limit=300):
     try:
-        # SWITCHED TO KRAKEN TO FIX REGION BLOCK
         exchange = ccxt.kraken({'enableRateLimit': True}) 
         bars = exchange.fetch_ohlcv(sym, timeframe=tf, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -191,7 +193,6 @@ def get_market_data(sym, tf, window, limit=300):
 @st.cache_data(ttl=5)
 def get_order_book(sym):
     try:
-        # SWITCHED TO KRAKEN TO FIX REGION BLOCK
         exchange = ccxt.kraken({'enableRateLimit': True})
         ob = exchange.fetch_order_book(sym, limit=20)
         bids = pd.DataFrame(ob['bids'], columns=['price', 'size'])
@@ -199,8 +200,10 @@ def get_order_book(sym):
         bid_vol = bids['size'].sum(); ask_vol = asks['size'].sum()
         total = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total if total > 0 else 0
-        return bids, asks, imbalance, bid_vol, ask_vol
-    except: return pd.DataFrame(), pd.DataFrame(), 0, 0, 0
+        return bids, asks, imbalance, bid_vol, ask_vol, None # No error
+    except Exception as e:
+        # Return error string for debugging
+        return pd.DataFrame(), pd.DataFrame(), 0, 0, 0, str(e)
 
 @st.cache_data(ttl=300) 
 def calculate_volume_profile(df, bins=40):
@@ -305,7 +308,8 @@ with st.sidebar:
     
     # --- 2. INSTITUTIONAL ORDER FLOW MENU ---
     with st.expander("🌊 INSTITUTIONAL FLOW", expanded=False):
-        bids, asks, imb, b_vol, a_vol = get_order_book(st.session_state.symbol)
+        # NEW: Error catching unpack
+        bids, asks, imb, b_vol, a_vol, flow_err = get_order_book(st.session_state.symbol)
         
         if not bids.empty:
             wall_msg = "NEUTRAL LIQUIDITY"
@@ -327,10 +331,12 @@ with st.sidebar:
                 st.markdown(f"""<div class="orderflow-row"><span style="color:{b_c}">{b_s:.2f}</span><span style="color:#444">|</span><span style="color:{a_c}">{a_s:.2f}</span></div>""", unsafe_allow_html=True)
         else:
             st.error("OFFLINE")
+            # SHOW ERROR MESSAGE IF OFFLINE
+            if flow_err:
+                st.caption(f"Debug: {flow_err}")
             
-    # --- 3. ASSET SELECTION MENU (UPDATED FOR KRAKEN) ---
+    # --- 3. ASSET SELECTION MENU ---
     with st.expander("🪙 ASSET SELECTION", expanded=False):
-        # Updated symbols to Kraken format (USD instead of USDT)
         wl = ["BTC/USD", "ETH/USD", "SOL/USD"] 
         for s in wl:
             if st.button(f"{s}", key=s): 
