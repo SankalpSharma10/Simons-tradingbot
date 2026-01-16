@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
     layout="wide", 
-    page_title="Simons",
+    page_title="Simons // Code&Quant",
     page_icon="🧬",
     initial_sidebar_state="expanded"
 )
@@ -170,20 +170,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. DATA ENGINE (FIXED FOR KRAKEN COLUMNS) ---
+# --- 4. DATA ENGINE ---
 
 @st.cache_data(ttl=5) 
 def get_market_data(sym, tf, window, limit=300):
+    """
+    Fetches OHLCV data from Kraken, calculates Z-Score, and detects volatility.
+    
+    Args:
+        sym (str): Trading pair symbol (e.g., 'BTC/USD').
+        tf (str): Timeframe (e.g., '15m').
+        window (int): Rolling window for Mean/StdDev calculation.
+    
+    Returns:
+        df (DataFrame): Processed data with Z-Score.
+        error (str): Error message if API fails.
+    """
     try:
+        # We use Kraken because it provides reliable US-compliant data
         exchange = ccxt.kraken({'enableRateLimit': True}) 
         bars = exchange.fetch_ohlcv(sym, timeframe=tf, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
         if not df.empty:
+            # --- QUANT LOGIC: STATISTICAL MEAN REVERSION ---
             df['Mean'] = df['close'].rolling(window).mean()
             df['StdDev'] = df['close'].rolling(window).std()
             df['Z_Score'] = (df['close'] - df['Mean']) / df['StdDev']
+            # Volatility Expansion Logic
             df['Prev_StdDev'] = df['StdDev'].shift(1)
             df['Vol_Expansion'] = df['StdDev'] > (df['Prev_StdDev'] * 1.4)
         return df, None
@@ -192,24 +207,32 @@ def get_market_data(sym, tf, window, limit=300):
 
 @st.cache_data(ttl=5)
 def get_order_book(sym):
+    """
+    Fetches Level 2 Depth (Order Book) to detect Whale Walls and Imbalance.
+    
+    Returns:
+        bids, asks (DataFrame): Top 20 Buy/Sell orders.
+        imbalance (float): Ratio of buying vs selling pressure (-1 to 1).
+    """
     try:
         exchange = ccxt.kraken({'enableRateLimit': True})
         ob = exchange.fetch_order_book(sym, limit=20)
-        
-        # --- KRAKEN FIX: Accept 3 columns (Price, Size, Timestamp) ---
-        bids = pd.DataFrame(ob['bids'], columns=['price', 'size', 'timestamp'])
-        asks = pd.DataFrame(ob['asks'], columns=['price', 'size', 'timestamp'])
-        # -------------------------------------------------------------
-        
+        bids = pd.DataFrame(ob['bids'], columns=['price', 'size'])
+        asks = pd.DataFrame(ob['asks'], columns=['price', 'size'])
         bid_vol = bids['size'].sum(); ask_vol = asks['size'].sum()
         total = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total if total > 0 else 0
-        return bids, asks, imbalance, bid_vol, ask_vol, None 
+        return bids, asks, imbalance, bid_vol, ask_vol, None # No error
     except Exception as e:
+        # Return error string for debugging
         return pd.DataFrame(), pd.DataFrame(), 0, 0, 0, str(e)
 
 @st.cache_data(ttl=300) 
 def calculate_volume_profile(df, bins=40):
+    """
+    Calculates Volume Profile by bucketing volume into price bins.
+    Used to visualize high-interest trading zones.
+    """
     if df.empty: return pd.DataFrame()
     p_min = df['low'].min(); p_max = df['high'].max()
     bin_size = (p_max - p_min) / bins
@@ -253,6 +276,11 @@ def render_volume_profile(fig, vp_df, min_time, max_time):
 # --- 7. BACKTEST ENGINE & REPORTING ---
 
 def run_backtest(df, entry_z):
+    """
+    Iterative Backtest Engine. 
+    Simulates trades based on historical Z-Score signals.
+    Prevents look-ahead bias by iterating row-by-row.
+    """
     balance = 1000
     equity = [balance]
     position = 0; entry_price = 0; trades = []
@@ -311,6 +339,7 @@ with st.sidebar:
     
     # --- 2. INSTITUTIONAL ORDER FLOW MENU ---
     with st.expander("🌊 INSTITUTIONAL FLOW", expanded=False):
+        # NEW: Error catching unpack
         bids, asks, imb, b_vol, a_vol, flow_err = get_order_book(st.session_state.symbol)
         
         if not bids.empty:
@@ -333,7 +362,9 @@ with st.sidebar:
                 st.markdown(f"""<div class="orderflow-row"><span style="color:{b_c}">{b_s:.2f}</span><span style="color:#444">|</span><span style="color:{a_c}">{a_s:.2f}</span></div>""", unsafe_allow_html=True)
         else:
             st.error("OFFLINE")
-            if flow_err: st.caption(f"Debug: {flow_err}")
+            # SHOW ERROR MESSAGE IF OFFLINE
+            if flow_err:
+                st.caption(f"Debug: {flow_err}")
             
     # --- 3. ASSET SELECTION MENU ---
     with st.expander("🪙 ASSET SELECTION", expanded=False):
@@ -352,6 +383,10 @@ with st.sidebar:
     if menu == "LIVE FEED":
         st.markdown("---")
         enable_refresh = st.toggle("⚡ LIVE MODE (5s)", value=True)
+        
+    st.markdown("---")
+    st.caption("© 2026 TEAM Code&Quant")
+    st.caption("Built for Hackathon Finals")
 
 # --- 9. MAIN APP ---
 
@@ -458,6 +493,7 @@ if menu == "LIVE FEED":
                 st.markdown(f"""<div style="background:rgba(255,255,255,0.05); padding:10px; border:1px solid #333; display:flex; justify-content:space-between; align-items:center;"><span style="font-size:12px; color:#888;">ACTIVE PNL</span><span style="font-size:20px; font-weight:bold; font-family:'Rajdhani'; color:{pnl_col}">{pnl:+.2f}%</span></div>""", unsafe_allow_html=True)
                 if st.button("CLOSE POSITION"): st.session_state.active_trade = None; st.rerun()
     else:
+        # Fallback if initial fetch fails
         st.error(f"DATA FEED DISCONNECTED. ERROR: {err}")
         st.info("Try refreshing the page or checking your internet connection.")
 
