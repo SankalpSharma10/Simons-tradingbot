@@ -386,7 +386,6 @@ with st.sidebar:
         
     st.markdown("---")
     st.caption("© 2026 TEAM Code&Quant")
-    st.caption("Built for Hackathon Finals")
 
 # --- 9. MAIN APP ---
 
