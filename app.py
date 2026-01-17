@@ -217,8 +217,15 @@ def get_order_book(sym):
     try:
         exchange = ccxt.kraken({'enableRateLimit': True})
         ob = exchange.fetch_order_book(sym, limit=20)
-        bids = pd.DataFrame(ob['bids'], columns=['price', 'size'])
-        asks = pd.DataFrame(ob['asks'], columns=['price', 'size'])
+        
+        # [FIX] Kraken/CCXT sometimes return [price, vol, timestamp]
+        # We explicitly slice [:2] to ensure we only get Price and Size.
+        b_data = [x[:2] for x in ob['bids']]
+        a_data = [x[:2] for x in ob['asks']]
+        
+        bids = pd.DataFrame(b_data, columns=['price', 'size'])
+        asks = pd.DataFrame(a_data, columns=['price', 'size'])
+        
         bid_vol = bids['size'].sum(); ask_vol = asks['size'].sum()
         total = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total if total > 0 else 0
